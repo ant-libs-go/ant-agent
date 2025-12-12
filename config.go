@@ -11,6 +11,7 @@ type Config struct {
 	AutoApprove  bool
 	Verbose      bool
 	TavilyApiKey string
+	SkillsDir    string
 }
 
 func DefaultCliFlags(config *Config) (r []cli.Flag) {
@@ -52,6 +53,12 @@ func DefaultCliFlags(config *Config) (r []cli.Flag) {
 			Required:    false,
 			Sources:     cli.EnvVars("TAVILY_API_KEY"),
 			Destination: &config.TavilyApiKey,
+		},
+		&cli.StringFlag{
+			Name: "skills-dir", Usage: "Skills directory (falls back to SKILLS_DIR env var)",
+			Required:    false,
+			Sources:     cli.EnvVars("SKILLS_DIR"),
+			Destination: &config.SkillsDir,
 		},
 	}
 }

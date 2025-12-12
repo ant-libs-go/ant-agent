@@ -6,25 +6,34 @@ import (
 	"fmt"
 
 	antagent "github.com/ant-libs-go/ant-agent"
+	"github.com/ant-libs-go/ant-agent/skills"
 	"github.com/ant-libs-go/util"
 	openai "github.com/sashabaranov/go-openai"
 )
 
 const PlanningAgentSystemPrompt = `
-# 你是一个负责任务规划的 Agent，将用户请求分解为子任务。
+# 你是系统的主协调代理（Main Orchestrator Agent），你的任务是：解析用户请求 → 规划任务 → 对每个任务步骤选择执行方式 → 产生结构化计划。
+
+你可以调用 2 种执行单元：
+1. **Skill**：模型内部的可执行能力，用于轻量、纯逻辑、无需外部资源的任务。
+2. **SubAgent**：独立的专家代理，适用于复杂、领域特化、需要进一步规划的任务。
+
+## 你可以使用以下 Skill：
+%s
 
 ## 你可以使用以下 SubAgent：
 %s
 
 ## 对于给定的用户请求，创建一个包含任务序列的计划。每个任务应包含：
-- name: 任意一个 SubAgent 的名称
-- description:  SubAgent 应该做什么
+- name: 任意一个 Skill 或 SubAgent 的名称
+- description:  Skill 或 SubAgent 应该做什么
 - parameters: 任务的可选参数 (例如: {"query": "搜索词"})
 
 ## 仅返回具有此结构的有效 JSON 对象：
 {
   "output": "总体计划描述",
   "tasks": [
+    {"name": "CodeReviewSkill", "description": "..."},
     {"name": "SearchSubAgent", "description": "...", "parameters": {"query": "..."}},
     {"name": "AnalyzeSubAgent", "description": "..."},
     {"name": "ReportSubAgent", "description": "..."},
@@ -43,29 +52,38 @@ type PlanningAgent struct {
 	CommonAgent
 	cfg       *antagent.Config
 	cli       *openai.Client
+	skills    map[string]*skills.Skill
 	subagents map[string]Agent
 }
 
-func NewPlanningAgent(cfg *antagent.Config) (r *PlanningAgent) {
+func NewPlanningAgent(cfg *antagent.Config, agentss []Agent, skillss []*skills.Skill) (r *PlanningAgent) {
 	r = &PlanningAgent{
 		cfg:       cfg,
+		skills:    map[string]*skills.Skill{},
 		subagents: map[string]Agent{},
 	}
 	openaiCfg := openai.DefaultConfig(cfg.ApiKey)
 	openaiCfg.BaseURL = cfg.ApiBase
 	r.cli = openai.NewClientWithConfig(openaiCfg)
 
-	r.AddSubAgent(NewSearchSubAgent(cfg))
-	r.AddSubAgent(NewAnalyzeSubAgent(cfg))
-	r.AddSubAgent(NewReportSubAgent(cfg))
-	//r.AddSubAgent(NewPPTSubAgent(cfg))
-	r.AddSubAgent(NewRenderSubAgent(cfg))
+	for _, skill := range skillss {
+		r.AddSkill(skill)
+	}
+
+	for _, agent := range agentss {
+		r.AddSubAgent(agent)
+	}
+
+	skillsPrompt := ""
+	for _, skill := range r.skills {
+		skillsPrompt += fmt.Sprintf("- %s: %s\n", skill.Meta.Name, skill.Meta.Description)
+	}
 
 	subAgentsPrompt := ""
 	for _, agent := range r.subagents {
 		subAgentsPrompt += fmt.Sprintf("- %s: %s\n", agent.Name(), agent.Description())
 	}
-	r.AddSystemMessage(fmt.Sprintf(PlanningAgentSystemPrompt, subAgentsPrompt))
+	r.AddSystemMessage(fmt.Sprintf(PlanningAgentSystemPrompt, skillsPrompt, subAgentsPrompt))
 	return
 }
 
@@ -81,21 +99,36 @@ func (this *PlanningAgent) Clone() Agent {
 	r := &PlanningAgent{
 		cfg:       this.cfg,
 		cli:       this.cli,
+		skills:    map[string]*skills.Skill{},
 		subagents: map[string]Agent{},
 	}
 
-	r.AddSubAgent(NewSearchSubAgent(this.cfg))
-	r.AddSubAgent(NewAnalyzeSubAgent(this.cfg))
-	r.AddSubAgent(NewReportSubAgent(this.cfg))
-	//r.AddSubAgent(NewPPTSubAgent(cfg))
-	r.AddSubAgent(NewRenderSubAgent(this.cfg))
+	for _, skill := range this.skills {
+		r.AddSkill(skill)
+	}
+
+	for _, agent := range this.subagents {
+		r.AddSubAgent(agent.Clone())
+	}
+
+	skillsPrompt := ""
+	for _, skill := range r.skills {
+		skillsPrompt += fmt.Sprintf("- %s: %s\n", skill.Meta.Name, skill.Meta.Description)
+	}
 
 	subAgentsPrompt := ""
 	for _, agent := range r.subagents {
 		subAgentsPrompt += fmt.Sprintf("- %s: %s\n", agent.Name(), agent.Description())
 	}
-	r.AddSystemMessage(fmt.Sprintf(PlanningAgentSystemPrompt, subAgentsPrompt))
+	r.AddSystemMessage(fmt.Sprintf(PlanningAgentSystemPrompt, skillsPrompt, subAgentsPrompt))
 	return r
+}
+func (this *PlanningAgent) AddSkill(skill *skills.Skill) {
+	this.skills[skill.Meta.Name] = skill
+}
+
+func (this *PlanningAgent) GetSkill(name string) *skills.Skill {
+	return this.skills[name]
 }
 
 func (this *PlanningAgent) AddSubAgent(agent Agent) {
@@ -135,6 +168,7 @@ func (this *PlanningAgent) plan() (r *Result, err error) {
 func (this *PlanningAgent) Execute(ctx *Context, task *Task) (r *Result, err error) {
 	fmt.Printf("🧠 正在规划你的任务...\n")
 	r = &Result{}
+	this.AddUserMessage(ctx.Input)
 
 	for {
 		var result *Result

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ant-libs-go/ant-agent/mcps"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -16,10 +17,11 @@ type Agent interface {
 }
 
 type Context struct {
-	Input  string  `json:"input"`
-	Plans  string  `json:"plans"`
-	Offset int     `json:"offset"`
-	Tasks  []*Task `json:"tasks"`
+	Input     string `json:"input"`
+	Plans     string `json:"plans"`
+	McpClient *mcps.McpClient
+	Offset    int     `json:"offset"`
+	Tasks     []*Task `json:"tasks"`
 }
 
 func (this *Context) ClearChatHistory() {
@@ -74,10 +76,11 @@ func (this *CommonAgent) AddFunctionMessage(content string) {
 		Content: content,
 	})
 }
-func (this *CommonAgent) AddToolMessage(content string) {
+func (this *CommonAgent) AddToolMessage(callId string, content string) {
 	this.messages = append(this.messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleTool,
-		Content: content,
+		Role:       openai.ChatMessageRoleTool,
+		ToolCallID: callId,
+		Content:    content,
 	})
 }
 
